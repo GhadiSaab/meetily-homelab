@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 from typing import Optional, List
 import logging
+import os
 from dotenv import load_dotenv
 from db import DatabaseManager
 import json
@@ -43,12 +44,23 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],     # Allow all origins for testing
-    allow_credentials=True,
-    allow_methods=["*"],     # Allow all methods
-    allow_headers=["*"],     # Allow all headers
-    max_age=3600,            # Cache preflight requests for 1 hour
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    max_age=3600,
 )
+
+# API key auth — all requests must carry X-API-Key matching API_SECRET_KEY env var
+_API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if _API_SECRET_KEY and request.headers.get("X-API-Key") != _API_SECRET_KEY:
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
 
 # Global database manager instance for meeting management endpoints
 db = DatabaseManager()
@@ -225,11 +237,11 @@ async def process_transcript_background(process_id: str, transcript: TranscriptR
         if not transcript.text or not transcript.text.strip():
             raise ValueError("Empty transcript text provided")
         
-        if transcript.model in ["claude", "groq", "openai"]:
+        if transcript.model in ["claude", "groq", "openai", "gemini"]:
             # Check if API key is available for cloud providers
             api_key = await processor.db.get_api_key(transcript.model)
             if not api_key:
-                provider_names = {"claude": "Anthropic", "groq": "Groq", "openai": "OpenAI"}
+                provider_names = {"claude": "Anthropic", "groq": "Groq", "openai": "OpenAI", "gemini": "Gemini"}
                 raise ValueError(f"{provider_names.get(transcript.model, transcript.model)} API key not configured. Please set your API key in the model settings.")
 
         _, all_json_data = await processor.process_transcript(
