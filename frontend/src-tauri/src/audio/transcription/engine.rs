@@ -2,10 +2,12 @@
 //
 // TranscriptionEngine enum and model initialization/validation logic.
 
+use super::api_provider::ApiTranscriptionProvider;
 use super::provider::TranscriptionProvider;
 use log::{info, warn};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
+use tauri_plugin_store::StoreExt;
 
 // ============================================================================
 // TRANSCRIPTION ENGINE ENUM
@@ -135,6 +137,13 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
                 }
             }
         }
+        "groq" | "selfHostedWhisper" => {
+            info!(
+                "🔍 Provider '{}' uses API transcription, skipping local model validation",
+                config.provider
+            );
+            Ok(())
+        }
         other => {
             warn!("❌ Unsupported transcription provider for local recording: {}", other);
             Err(format!(
@@ -211,6 +220,38 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
                     Err("Parakeet engine not initialized. This should not happen after validation.".to_string())
                 }
             }
+        }
+        "groq" => {
+            info!("🌐 Initializing Groq API transcription provider");
+            let api_key = config.api_key.unwrap_or_default();
+            let model = if config.model.is_empty() {
+                "whisper-large-v3-turbo".to_string()
+            } else {
+                config.model
+            };
+            let endpoint = "https://api.groq.com/openai/v1".to_string();
+
+            Ok(TranscriptionEngine::Provider(Arc::new(
+                ApiTranscriptionProvider::new(endpoint, api_key, model),
+            )))
+        }
+        "selfHostedWhisper" => {
+            info!("🏠 Initializing self-hosted Whisper API transcription provider");
+            let store = app
+                .store("store.json")
+                .map_err(|e| format!("Failed to open store for whisper endpoint: {}", e))?;
+            let endpoint = store
+                .get("whisperEndpoint")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .ok_or("Missing whisper endpoint in store key 'whisperEndpoint'".to_string())?;
+            let model = config.model;
+            let api_key = config.api_key.unwrap_or_default();
+
+            Ok(TranscriptionEngine::Provider(Arc::new(
+                ApiTranscriptionProvider::new(endpoint, api_key, model),
+            )))
         }
         "localWhisper" | _ => {
             info!("🎤 Initializing Whisper transcription engine");
