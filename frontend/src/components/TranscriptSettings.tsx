@@ -35,7 +35,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     }, [transcriptModelConfig.provider]);
 
     useEffect(() => {
-        load('store.json', { autoSave: false }).then(store =>
+        load('store.json').then(store =>
             store.get<string>('whisperEndpoint').then(v => setWhisperEndpoint(v || ''))
         ).catch(() => { });
     }, []);
@@ -73,7 +73,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
             });
 
             if (uiProvider === 'selfHostedWhisper') {
-                const store = await load('store.json', { autoSave: false });
+                const store = await load('store.json');
                 await store.set('whisperEndpoint', whisperEndpoint);
                 await store.save();
             }

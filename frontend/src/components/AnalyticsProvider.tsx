@@ -31,7 +31,6 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
 
     const initAnalytics = async () => {
       const store = await load('analytics.json', {
-        autoSave: false,
         defaults: {
           analyticsOptedIn: true
         }
@@ -64,7 +63,6 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
 
       // Store platform info in analytics.json for quick access
       const store = await load('analytics.json', {
-        autoSave: false,
         defaults: {
           analyticsOptedIn: true
         }

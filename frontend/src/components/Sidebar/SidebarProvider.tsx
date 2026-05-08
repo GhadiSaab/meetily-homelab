@@ -109,7 +109,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     const fetchSettings = async () => {
       try {
         const { load } = await import('@tauri-apps/plugin-store');
-        const store = await load('store.json', { autoSave: false });
+        const store = await load('store.json');
         const storedUrl = await store.get<string>('serverAddress');
         setServerAddress(storedUrl || 'http://localhost:5167');
       } catch {

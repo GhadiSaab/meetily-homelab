@@ -22,7 +22,7 @@ export function HomelabSettings() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const store = await load('store.json', { autoSave: false })
+        const store = await load('store.json')
         const savedServerAddress = await store.get<string>('serverAddress')
         const savedApiSecretKey = await store.get<string>('apiSecretKey')
 
@@ -41,7 +41,7 @@ export function HomelabSettings() {
     setConnectionStatus({ type: 'idle' })
 
     try {
-      const store = await load('store.json', { autoSave: false })
+      const store = await load('store.json')
       await store.set('serverAddress', serverAddress)
       await store.set('apiSecretKey', apiSecretKey)
       await store.save()
