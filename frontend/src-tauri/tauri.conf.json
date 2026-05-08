@@ -63,7 +63,6 @@
                         "store:default",
                         "notification:default",
                         "notification:allow-is-permission-granted",
-                        "updater:default",
                         "process:default",
                         {
                             "identifier": "fs:scope",
@@ -81,14 +80,10 @@
     "bundle": {
         "active": true,
         "targets": [
-            "deb",
-            "appimage",
             "msi",
-            "nsis",
-            "app",
-            "dmg"
+            "nsis"
         ],
-        "createUpdaterArtifacts": true,
+        "createUpdaterArtifacts": false,
         "icon": [
             "icons/icon.png",
             "icons/app_icon.icns",
@@ -107,12 +102,5 @@
         },
         "windows": {}
     },
-    "plugins": {
-        "updater": {
-            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDQTYzMUQ3ODc5N0M4MkEKUldRcXlKZUgxekdtN09DRkVWSHNpZlJseEVOUmpNd1dDSTNaLzZ3MXJGTnY3WW1pdnlOYjBpbkIK",
-            "endpoints": [
-                "https://github.com/GhadiSaab/meetily-homelab/releases/latest/download/latest.json"
-            ]
-        }
-    }
+    "plugins": {}
 }
