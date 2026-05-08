@@ -107,8 +107,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const fetchSettings = async () => {
-      setServerAddress('http://localhost:5167');
-      setTranscriptServerAddress('http://127.0.0.1:8178/stream');
+      try {
+        const { load } = await import('@tauri-apps/plugin-store');
+        const store = await load('store.json', { autoSave: false });
+        const storedUrl = await store.get<string>('serverAddress');
+        setServerAddress(storedUrl || 'http://localhost:5167');
+      } catch {
+        setServerAddress('http://localhost:5167');
+      }
     };
     fetchSettings();
   }, []);

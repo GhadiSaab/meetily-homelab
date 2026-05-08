@@ -229,10 +229,27 @@ async fn get_auth_token<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     }
 }
 
-// Helper function to get server address - now hardcoded
-async fn get_server_address<R: Runtime>(_app: &AppHandle<R>) -> Result<String, String> {
-    log_info!("Using hardcoded server URL: {}", APP_SERVER_URL);
+// Helper function to get server address from store with fallback
+async fn get_server_address<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
+    if let Ok(store) = app.store("store.json") {
+        if let Some(val) = store.get("serverAddress") {
+            if let Some(url) = val.as_str() {
+                if !url.is_empty() {
+                    log_info!("Using server URL from store: {}", url);
+                    return Ok(url.to_string());
+                }
+            }
+        }
+    }
+    log_info!("Using default server URL: {}", APP_SERVER_URL);
     Ok(APP_SERVER_URL.to_string())
+}
+
+async fn get_api_secret_key<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let store = app.store("store.json").ok()?;
+    let val = store.get("apiSecretKey")?;
+    let key = val.as_str()?.to_string();
+    if key.is_empty() { None } else { Some(key) }
 }
 
 // Generic API call function with optional authentication
@@ -264,6 +281,10 @@ async fn make_api_request<R: Runtime, T: for<'de> Deserialize<'de>>(
         request = request.header("Authorization", format!("Bearer {}", token));
     } else {
         log_warn!("No auth token provided, making unauthenticated request");
+    }
+    // Add API secret key header for homelab authentication
+    if let Some(secret) = get_api_secret_key(app).await {
+        request = request.header("X-API-Key", secret);
     }
 
     request = request.header("Content-Type", "application/json");
