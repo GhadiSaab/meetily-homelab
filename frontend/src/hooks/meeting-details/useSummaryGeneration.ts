@@ -107,7 +107,7 @@ export function useSummaryGeneration({
       const result = await invokeTauri('api_process_transcript', {
         text: transcriptText,
         model: 'gemini',
-        modelName: 'gemma-4-31b-it',
+        modelName: 'models/gemma-4-31b-it',
         meetingId: meeting.id,
         chunkSize: 40000,
         overlap: 1000,
