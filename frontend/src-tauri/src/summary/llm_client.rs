@@ -262,81 +262,104 @@ pub async fn generate_summary(
 
     info!("🐞 LLM Request to {}: model={}", provider_name(provider), model_name);
 
-    // Send request with timeout and cancellation support
-    let request_future = client
-        .post(api_url)
-        .headers(headers)
-        .json(&request_body)
-        .timeout(REQUEST_TIMEOUT_DURATION)
-        .send();
+    // Retry loop: up to 4 attempts with exponential backoff for transient 5xx errors
+    const MAX_ATTEMPTS: u32 = 4;
+    let mut last_error = String::new();
 
-    // Use tokio::select to race between cancellation and request completion
-    let response = if let Some(token) = cancellation_token {
-        tokio::select! {
-            result = request_future => {
-                result.map_err(|e| {
-                    if e.is_timeout() {
-                        format!("LLM request timed out after 60 seconds")
-                    } else {
-                        format!("Failed to send request to LLM: {}", e)
-                    }
-                })?
-            }
-            _ = token.cancelled() => {
+    for attempt in 1..=MAX_ATTEMPTS {
+        // Check cancellation before each attempt
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
                 return Err("Summary generation was cancelled".to_string());
             }
         }
-    } else {
-        request_future.await.map_err(|e| {
-            if e.is_timeout() {
-                format!("LLM request timed out after 60 seconds")
-            } else {
-                format!("Failed to send request to LLM: {}", e)
+
+        let request_future = client
+            .post(&api_url)
+            .headers(headers.clone())
+            .json(&request_body)
+            .timeout(REQUEST_TIMEOUT_DURATION)
+            .send();
+
+        let response = if let Some(token) = cancellation_token {
+            tokio::select! {
+                result = request_future => {
+                    result.map_err(|e| {
+                        if e.is_timeout() {
+                            "LLM request timed out".to_string()
+                        } else {
+                            format!("Failed to send request to LLM: {}", e)
+                        }
+                    })?
+                }
+                _ = token.cancelled() => {
+                    return Err("Summary generation was cancelled".to_string());
+                }
             }
-        })?
-    };
+        } else {
+            request_future.await.map_err(|e| {
+                if e.is_timeout() {
+                    "LLM request timed out".to_string()
+                } else {
+                    format!("Failed to send request to LLM: {}", e)
+                }
+            })?
+        };
 
-    if !response.status().is_success() {
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(format!("LLM API request failed: {}", error_body));
+        let status = response.status();
+
+        if status.is_success() {
+            // Parse response based on provider
+            return if provider == &LLMProvider::Claude {
+                let chat_response = response
+                    .json::<ClaudeChatResponse>()
+                    .await
+                    .map_err(|e| format!("Failed to parse LLM response: {}", e))?;
+                info!("🐞 LLM Response received from Claude");
+                let content = chat_response
+                    .content
+                    .get(0)
+                    .ok_or("No content in LLM response")?
+                    .text
+                    .trim();
+                Ok(content.to_string())
+            } else {
+                let chat_response = response
+                    .json::<ChatResponse>()
+                    .await
+                    .map_err(|e| format!("Failed to parse LLM response: {}", e))?;
+                info!("🐞 LLM Response received from {}", provider_name(provider));
+                let content = chat_response
+                    .choices
+                    .get(0)
+                    .ok_or("No content in LLM response")?
+                    .message
+                    .content
+                    .trim();
+                Ok(content.to_string())
+            };
+        }
+
+        let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+
+        // Only retry on 5xx server errors, not 4xx client errors
+        if !status.is_server_error() {
+            return Err(format!("LLM API request failed ({}): {}", status.as_u16(), error_body));
+        }
+
+        last_error = format!("LLM API request failed ({}): {}", status.as_u16(), error_body);
+
+        if attempt < MAX_ATTEMPTS {
+            let backoff = Duration::from_secs(2u64.pow(attempt - 1)); // 1s, 2s, 4s
+            tracing::warn!(
+                "⚠️ LLM returned {} (attempt {}/{}), retrying in {}s...",
+                status.as_u16(), attempt, MAX_ATTEMPTS, backoff.as_secs()
+            );
+            tokio::time::sleep(backoff).await;
+        }
     }
 
-    // Parse response based on provider
-    if provider == &LLMProvider::Claude {
-        let chat_response = response
-            .json::<ClaudeChatResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse LLM response: {}", e))?;
-
-        info!("🐞 LLM Response received from Claude");
-
-        let content = chat_response
-            .content
-            .get(0)
-            .ok_or("No content in LLM response")?
-            .text
-            .trim();
-        Ok(content.to_string())
-    } else {
-        let chat_response = response
-            .json::<ChatResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse LLM response: {}", e))?;
-
-        info!("🐞 LLM Response received from {}", provider_name(provider));
-
-        let content = chat_response
-            .choices
-            .get(0)
-            .ok_or("No content in LLM response")?
-            .message
-            .content
-            .trim();
-        Ok(content.to_string())
-    }
+    Err(last_error)
 }
 
 /// Helper function to get provider name for logging
