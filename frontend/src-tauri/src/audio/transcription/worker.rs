@@ -443,7 +443,8 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
     match engine {
         TranscriptionEngine::Provider(provider) => {
             // NEW: Trait-based provider (clean, unified interface)
-            let language = crate::get_language_preference_internal();
+            let language = crate::get_language_preference_internal()
+                .filter(|l| !l.is_empty() && l != "auto-translate" && l != "auto");
 
             match provider.transcribe(speech_samples, language).await {
                 Ok(result) => {
