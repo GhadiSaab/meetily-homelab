@@ -63,8 +63,8 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: "frontend/src-tauri -> ../target"
-          key: windows-x64-homelab-v1
+          workspaces: "frontend/src-tauri -> target"
+          key: windows-x64-homelab-${{ hashFiles('frontend/src-tauri/Cargo.lock') }}
 
       - name: Install frontend dependencies
         run: |
