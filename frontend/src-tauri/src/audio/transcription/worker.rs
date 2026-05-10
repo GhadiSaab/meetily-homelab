@@ -7,8 +7,10 @@ use super::provider::TranscriptionError;
 use crate::audio::AudioChunk;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Runtime};
 
 // Sequence counter for transcript updates
@@ -90,6 +92,22 @@ pub fn start_transcription_task<R: Runtime>(
             let worker_handle = tokio::spawn(async move {
                 info!("👷 Worker {} started", worker_id);
 
+                // Sliding-window rate limiter: stay under 15 req/min for API providers
+                const MAX_REQUESTS_PER_MINUTE: usize = 14;
+                const RATE_WINDOW: Duration = Duration::from_secs(60);
+                let mut request_times: VecDeque<Instant> = VecDeque::new();
+
+                let rate_limit_excuses = [
+                    "Touching grass. Back in a sec.",
+                    "The API needs a snack break. Relatable.",
+                    "Slow down, Speedy González — the API is tired.",
+                    "Throttling engaged. This is fine. 🔥",
+                    "API said 'I need space'. Giving it space.",
+                    "Taking a mandatory chill pill. Doctor's orders.",
+                    "The rate limit bouncer said 'not yet, pal'.",
+                    "API is on a smoke break. We wait.",
+                ];
+
                 // PRE-VALIDATE model state to avoid repeated async calls per chunk
                 let initial_model_loaded = engine_clone.is_model_loaded().await;
                 let current_model = engine_clone
@@ -140,6 +158,23 @@ pub fn start_transcription_task<R: Runtime>(
 
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+
+                            // Rate limiter: slide the window and sleep if we'd exceed 14 req/min
+                            {
+                                let now = Instant::now();
+                                while request_times.front().map_or(false, |&t| now.duration_since(t) >= RATE_WINDOW) {
+                                    request_times.pop_front();
+                                }
+                                if request_times.len() >= MAX_REQUESTS_PER_MINUTE {
+                                    let oldest = *request_times.front().unwrap();
+                                    let wait = RATE_WINDOW - now.duration_since(oldest);
+                                    let excuse = rate_limit_excuses[request_times.len() % rate_limit_excuses.len()];
+                                    warn!("🚦 Rate limiter: {}. Waiting {}ms before next API call.", excuse, wait.as_millis());
+                                    tokio::time::sleep(wait).await;
+                                    request_times.pop_front();
+                                }
+                                request_times.push_back(Instant::now());
+                            }
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
