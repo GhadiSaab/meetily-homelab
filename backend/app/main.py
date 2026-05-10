@@ -642,6 +642,14 @@ async def search_transcripts(request: SearchRequest):
         logger.error(f"Error searching transcripts: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/gemini-key")
+async def get_gemini_key():
+    """Return the Gemini API key from environment (auth enforced by middleware)"""
+    key = os.getenv("GEMINI_API_KEY", "")
+    if not key:
+        raise HTTPException(status_code=404, detail="GEMINI_API_KEY not configured")
+    return {"api_key": key}
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on API shutdown"""

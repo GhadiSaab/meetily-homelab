@@ -99,15 +99,15 @@ export function useSummaryGeneration({
 
       // Show toast notification for generation start
       toast.info(`${isRegeneration ? 'Regenerating' : 'Generating'} summary...`, {
-        description: `Using ${modelConfig.provider}/${modelConfig.model}`,
+        description: `Using Gemini / gemma-4-31b-it`,
         duration: 3000,
       });
 
       // Process transcript and get process_id
       const result = await invokeTauri('api_process_transcript', {
         text: transcriptText,
-        model: modelConfig.provider,
-        modelName: modelConfig.model,
+        model: 'gemini',
+        modelName: 'gemma-4-31b-it',
         meetingId: meeting.id,
         chunkSize: 40000,
         overlap: 1000,

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_store::StoreExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use once_cell::sync::Lazy;
@@ -64,7 +65,7 @@ impl SummaryService {
     /// the main thread. It updates the database with progress and results.
     ///
     /// # Arguments
-    /// * `_app` - Tauri app handle (for future use)
+    /// * `app` - Tauri app handle
     /// * `pool` - SQLx connection pool
     /// * `meeting_id` - Unique identifier for the meeting
     /// * `text` - Full transcript text
@@ -73,7 +74,7 @@ impl SummaryService {
     /// * `custom_prompt` - Optional user-provided context
     /// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
     pub async fn process_transcript_background<R: tauri::Runtime>(
-        _app: AppHandle<R>,
+        app: AppHandle<R>,
         pool: SqlitePool,
         meeting_id: String,
         text: String,
@@ -104,6 +105,59 @@ impl SummaryService {
         let api_key = if provider == LLMProvider::Ollama || provider == LLMProvider::BuiltInAI || provider == LLMProvider::CustomOpenAI {
             // These providers don't require API keys from the standard database column
             String::new()
+        } else if provider == LLMProvider::Gemini {
+            let store = match app.store("store.json") {
+                Ok(store) => store,
+                Err(e) => {
+                    let err_msg = format!("Failed to open store for Gemini key fetch: {}", e);
+                    Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
+                    return;
+                }
+            };
+
+            let server_url = store
+                .get("serverAddress")
+                .and_then(|v| v.as_str().map(|s| s.trim_end_matches('/').to_string()))
+                .unwrap_or_else(|| "http://localhost:5167".to_string());
+            let secret = store
+                .get("apiSecretKey")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            let client = reqwest::Client::new();
+            let resp = match client
+                .get(format!("{}/api/gemini-key", server_url))
+                .header("X-API-Key", secret)
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let err_msg = format!("Failed to fetch Gemini key from homelab: {}", e);
+                    Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
+                    return;
+                }
+            };
+
+            if !resp.status().is_success() {
+                let err_msg = format!("Homelab returned {} fetching Gemini key", resp.status());
+                Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
+                return;
+            }
+
+            #[derive(serde::Deserialize)]
+            struct GeminiKeyResp {
+                api_key: String,
+            }
+
+            match resp.json::<GeminiKeyResp>().await {
+                Ok(body) => body.api_key,
+                Err(e) => {
+                    let err_msg = format!("Failed to parse Gemini key response: {}", e);
+                    Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
+                    return;
+                }
+            }
         } else {
             match SettingsRepository::get_api_key(&pool, &model_provider).await {
                 Ok(Some(key)) if !key.is_empty() => key,
@@ -217,7 +271,7 @@ impl SummaryService {
         };
 
         // Get app data directory for BuiltInAI provider
-        let app_data_dir = _app.path().app_data_dir().ok();
+        let app_data_dir = app.path().app_data_dir().ok();
 
         // Generate summary
         let client = reqwest::Client::new();

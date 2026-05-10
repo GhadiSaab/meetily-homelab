@@ -67,6 +67,7 @@ pub struct ClaudeChatContent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum LLMProvider {
     OpenAI,
+    Gemini,
     Claude,
     Groq,
     Ollama,
@@ -80,6 +81,7 @@ impl LLMProvider {
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "openai" => Ok(Self::OpenAI),
+            "gemini" => Ok(Self::Gemini),
             "claude" => Ok(Self::Claude),
             "groq" => Ok(Self::Groq),
             "ollama" => Ok(Self::Ollama),
@@ -151,6 +153,11 @@ pub async fn generate_summary(
     let (api_url, mut headers) = match provider {
         LLMProvider::OpenAI => (
             "https://api.openai.com/v1/chat/completions".to_string(),
+            header::HeaderMap::new(),
+        ),
+        LLMProvider::Gemini => (
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                .to_string(),
             header::HeaderMap::new(),
         ),
         LLMProvider::Groq => (
@@ -336,6 +343,7 @@ pub async fn generate_summary(
 fn provider_name(provider: &LLMProvider) -> &str {
     match provider {
         LLMProvider::OpenAI => "OpenAI",
+        LLMProvider::Gemini => "Gemini",
         LLMProvider::Claude => "Claude",
         LLMProvider::Groq => "Groq",
         LLMProvider::Ollama => "Ollama",
