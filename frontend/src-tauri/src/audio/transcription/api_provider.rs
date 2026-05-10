@@ -4,6 +4,7 @@
 
 use super::provider::{TranscriptionError, TranscriptionProvider, TranscriptResult};
 use async_trait::async_trait;
+use log::warn;
 use reqwest::multipart;
 use serde::Deserialize;
 
@@ -75,6 +76,20 @@ impl TranscriptionProvider for ApiTranscriptionProvider {
         audio: Vec<f32>,
         language: Option<String>,
     ) -> std::result::Result<TranscriptResult, TranscriptionError> {
+        // Groq requires at least 0.1s of audio (1600 samples at 16kHz)
+        const MIN_SAMPLES: usize = 1600;
+        if audio.len() < MIN_SAMPLES {
+            warn!(
+                "Audio chunk too short ({} samples, need {}), skipping",
+                audio.len(),
+                MIN_SAMPLES
+            );
+            return Err(TranscriptionError::AudioTooShort {
+                samples: audio.len(),
+                minimum: MIN_SAMPLES,
+            });
+        }
+
         let wav_bytes = Self::encode_wav(&audio);
 
         let file_part = multipart::Part::bytes(wav_bytes)
@@ -101,9 +116,15 @@ impl TranscriptionProvider for ApiTranscriptionProvider {
             .await
             .map_err(|e| TranscriptionError::EngineFailed(e.to_string()))?;
 
-        let response = response
-            .error_for_status()
-            .map_err(|e| TranscriptionError::EngineFailed(e.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_else(|_| "<unreadable>".to_string());
+            warn!("Groq transcription API error {}: {}", status, body);
+            return Err(TranscriptionError::EngineFailed(format!(
+                "Groq API {} — {}",
+                status, body
+            )));
+        }
 
         let payload: TranscriptionResponse = response
             .json()
