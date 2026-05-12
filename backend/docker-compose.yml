@@ -26,7 +26,7 @@ services:
       - ${LOCAL_ENV_FILE:-./app/.env}:/app/.env:ro
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5167/get-meetings"]
+      test: ["CMD", "curl", "-f", "http://localhost:5167/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -34,6 +34,43 @@ services:
 
     mem_limit: 2g
     mem_reservation: 512m
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  meetily-web-ui:
+    build:
+      context: ../web-ui
+      dockerfile: Dockerfile
+    image: meetily-web-ui:latest
+    container_name: meetily-web-ui
+    restart: unless-stopped
+
+    ports:
+      - "${WEB_PORT:-3119}:3119"
+
+    environment:
+      # Server-side: internal Docker network address for backend
+      - BACKEND_URL=http://meetily-backend:5167
+      # API key — server-side only, never reaches the browser
+      - API_SECRET_KEY=${API_SECRET_KEY:-}
+
+    depends_on:
+      meetily-backend:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3119/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    mem_limit: 512m
+    mem_reservation: 128m
 
     logging:
       driver: "json-file"
