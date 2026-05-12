@@ -59,5 +59,9 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
     };
   }, [editor, onChange]);
 
-  return <BlockNoteView editor={editor} editable={editable} theme="light" />;
+  return (
+    <div style={{ maxWidth: '100%', overflowX: 'hidden', wordBreak: 'break-word' }}>
+      <BlockNoteView editor={editor} editable={editable} theme="light" />
+    </div>
+  );
 }

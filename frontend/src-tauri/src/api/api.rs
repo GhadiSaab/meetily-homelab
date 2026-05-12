@@ -994,19 +994,41 @@ pub async fn api_save_transcript<R: Runtime>(
     let pool = state.db_manager.pool();
 
     // Now, call the repository with the correctly typed data.
-    match TranscriptsRepository::save_transcript(
+    let local_result = TranscriptsRepository::save_transcript(
         pool,
         &meeting_title,
         &transcripts_to_save,
         folder_path,
     )
-    .await
-    {
+    .await;
+
+    match local_result {
         Ok(meeting_id) => {
             log_info!(
                 "Successfully saved transcript and created meeting with id: {}",
                 meeting_id
             );
+
+            // Also POST to homelab backend — best-effort, never fails the local save.
+            let homelab_body = serde_json::json!({
+                "meeting_title": meeting_title,
+                "transcripts": &transcripts_to_save,
+            });
+            let body_str = serde_json::to_string(&homelab_body).unwrap_or_default();
+            match make_api_request::<R, serde_json::Value>(
+                &_app,
+                "/save-transcript",
+                "POST",
+                Some(&body_str),
+                None,
+                auth_token,
+            )
+            .await
+            {
+                Ok(_) => log_info!("Transcript also posted to homelab backend successfully"),
+                Err(e) => log_warn!("Failed to post transcript to homelab backend (non-fatal): {}", e),
+            }
+
             Ok(serde_json::json!({
                 "status": "success",
                 "message": "Transcript saved successfully",
@@ -1097,7 +1119,7 @@ pub async fn open_meeting_folder<R: Runtime>(
 
 // Simple test command to check backend connectivity
 #[tauri::command]
-pub async fn test_backend_connection<R: Runtime>(
+pub async fn api_test_connection<R: Runtime>(
     app: AppHandle<R>,
     auth_token: Option<String>,
 ) -> Result<String, String> {
@@ -1108,17 +1130,25 @@ pub async fn test_backend_connection<R: Runtime>(
 
     log_debug!("Testing connection to: {}", server_url);
 
-    let mut request = client.get(&format!("{}/docs", server_url));
+    // Use /health which is exempt from API key auth
+    let mut request = client.get(&format!("{}/health", server_url));
 
     if let Some(token) = auth_token {
         request = request.header("Authorization", format!("Bearer {}", token));
+    }
+    if let Some(secret) = get_api_secret_key(&app).await {
+        request = request.header("X-API-Key", secret);
     }
 
     match request.send().await {
         Ok(response) => {
             let status = response.status();
             log_debug!("Backend responded with status: {}", status);
-            Ok(format!("Backend is reachable. Status: {}", status))
+            if status.is_success() {
+                Ok(format!("Backend is reachable. Status: {}", status))
+            } else {
+                Err(format!("Backend returned error status: {}", status))
+            }
         }
         Err(e) => {
             let error_msg = format!("Failed to connect to backend: {}", e);
