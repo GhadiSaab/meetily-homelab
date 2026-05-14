@@ -145,14 +145,14 @@ export default function MeetingPage() {
         {summaryState === 'done' && summary?.data && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {sectionOrder.map((key) => {
-              const section = summary.data![key] as { title: string; blocks: string[] } | undefined;
+              const section = summary.data![key] as { title: string; blocks: { id: string; type: string; content: string; color: string }[] } | undefined;
               if (!section || !section.blocks?.length) return null;
               return (
                 <div key={key} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 16 }}>
                   <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>{section.title}</h3>
                   <ul style={{ paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {section.blocks.map((b, i) => (
-                      <li key={i} style={{ fontSize: 14, color: '#374151', lineHeight: 1.5 }}>{b}</li>
+                      <li key={b.id ?? i} style={{ fontSize: 14, color: b.color === 'gray' ? '#9ca3af' : '#374151', lineHeight: 1.5 }}>{b.content}</li>
                     ))}
                   </ul>
                 </div>
