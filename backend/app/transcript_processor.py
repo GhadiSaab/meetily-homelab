@@ -5,11 +5,12 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.openai import OpenAIModel
-from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
+import httpx
+import json as _json
 import logging
 from dotenv import load_dotenv
 from db import DatabaseManager
@@ -107,17 +108,97 @@ class TranscriptProcessor:
         llm = None # Define llm variable
 
         try:
-            # Select and initialize the AI model and agent
+            # Split transcript into chunks (shared by all providers)
+            step = chunk_size - overlap
+            if step <= 0:
+                logger.warning(f"Overlap ({overlap}) >= chunk_size ({chunk_size}). Adjusting overlap.")
+                overlap = max(0, chunk_size - 100)
+                step = chunk_size - overlap
+
+            chunks = [text[i:i+chunk_size] for i in range(0, len(text), step)]
+            num_chunks = len(chunks)
+            logger.info(f"Split transcript into {num_chunks} chunks.")
+
+            # Gemini: direct REST call — response_schema not supported on Gemma models
+            if model == "gemini":
+                api_key = await db.get_api_key("gemini")
+                if not api_key:
+                    raise ValueError("GEMINI_API_KEY not configured")
+                logger.info(f"Using Gemini REST (no structured output) for model: {model_name}")
+
+                schema_hint = """{
+  "MeetingName": "<string>",
+  "People": {"title": "People", "blocks": [{"id":"<str>","type":"bullet","content":"<Name (Role)>","color":""}]},
+  "SessionSummary": {"title": "Session Summary", "blocks": [{"id":"<str>","type":"text","content":"<str>","color":""}]},
+  "CriticalDeadlines": {"title": "Critical Deadlines", "blocks": []},
+  "KeyItemsDecisions": {"title": "Key Items & Decisions", "blocks": [{"id":"<str>","type":"bullet","content":"<str>","color":""}]},
+  "ImmediateActionItems": {"title": "Immediate Action Items", "blocks": [{"id":"<str>","type":"bullet","content":"<str>","color":""}]},
+  "NextSteps": {"title": "Next Steps", "blocks": [{"id":"<str>","type":"bullet","content":"<str>","color":""}]},
+  "MeetingNotes": {"meeting_name": "<str>", "sections": [{"title":"<str>","blocks":[{"id":"<str>","type":"text","content":"<str>","color":""}]}]}
+}"""
+
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    for i, chunk in enumerate(chunks):
+                        logger.info(f"Processing chunk {i+1}/{num_chunks}...")
+                        prompt = f"""Analyze this meeting transcript chunk and return ONLY a valid JSON object matching exactly this schema. No markdown, no explanation, just the JSON.
+
+Schema:
+{schema_hint}
+
+Rules:
+- Block "type" must be one of: text, bullet, heading1, heading2
+- Block "color": use "gray" for low-importance items, "" for default
+- Block "id": unique string like "b1", "b2", etc.
+- If a section has no relevant content, use an empty blocks list
+
+Additional context: {custom_prompt}
+
+Transcript:
+---
+{chunk}
+---
+
+Return only the JSON object:"""
+
+                        try:
+                            resp = await client.post(url, json={
+                                "contents": [{"parts": [{"text": prompt}]}],
+                                "generationConfig": {"temperature": 0.1}
+                            })
+                            resp.raise_for_status()
+                            data = resp.json()
+                            raw_text = ""
+                            for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                                if not part.get("thought"):
+                                    raw_text += part.get("text", "")
+
+                            # Strip markdown code fences if present
+                            raw_text = raw_text.strip()
+                            if raw_text.startswith("```"):
+                                raw_text = raw_text.split("```")[1]
+                                if raw_text.startswith("json"):
+                                    raw_text = raw_text[4:]
+                                raw_text = raw_text.strip()
+
+                            parsed = _json.loads(raw_text)
+                            # Validate it has the expected top-level keys
+                            SummaryResponse(**parsed)
+                            all_json_data.append(_json.dumps(parsed))
+                            logger.info(f"Successfully generated summary for chunk {i+1}.")
+                        except Exception as chunk_error:
+                            logger.error(f"Error processing chunk {i+1}: {chunk_error}", exc_info=True)
+
+                logger.info(f"Finished processing all {num_chunks} chunks.")
+                return num_chunks, all_json_data
+
+            # All other providers use pydantic-ai
             if model == "claude":
                 api_key = await db.get_api_key("claude")
                 if not api_key: raise ValueError("ANTHROPIC_API_KEY environment variable not set")
                 llm = AnthropicModel(model_name, provider=AnthropicProvider(api_key=api_key))
                 logger.info(f"Using Claude model: {model_name}")
-            elif model == "gemini":
-                api_key = await db.get_api_key("gemini")
-                if not api_key: raise ValueError("GEMINI_API_KEY not configured")
-                llm = GeminiModel(model_name, provider=GoogleProvider(api_key=api_key))
-                logger.info(f"Using Gemini model: {model_name}")
             elif model == "groq":
                 api_key = await db.get_api_key("groq")
                 if not api_key: raise ValueError("GROQ_API_KEY environment variable not set")
@@ -132,29 +213,12 @@ class TranscriptProcessor:
                 logger.error(f"Unsupported model provider requested: {model}")
                 raise ValueError(f"Unsupported model provider: {model}")
 
-            # Initialize the agent with the selected LLM
-            agent = Agent(
-                llm,
-                result_type=SummaryResponse,
-                result_retries=2,
-            )
+            agent = Agent(llm, result_type=SummaryResponse, result_retries=2)
             logger.info("Pydantic-AI Agent initialized.")
-
-            # Split transcript into chunks
-            step = chunk_size - overlap
-            if step <= 0:
-                logger.warning(f"Overlap ({overlap}) >= chunk_size ({chunk_size}). Adjusting overlap.")
-                overlap = max(0, chunk_size - 100)
-                step = chunk_size - overlap
-
-            chunks = [text[i:i+chunk_size] for i in range(0, len(text), step)]
-            num_chunks = len(chunks)
-            logger.info(f"Split transcript into {num_chunks} chunks.")
 
             for i, chunk in enumerate(chunks):
                 logger.info(f"Processing chunk {i+1}/{num_chunks}...")
                 try:
-                    # Run the agent to get the structured summary for the chunk
                     summary_result = await agent.run(
                         f"""Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure. If a specific section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. Ensure the output is only the JSON data.
 
@@ -163,7 +227,7 @@ class TranscriptProcessor:
                         - Use 'bullet' for list items
                         - Use 'heading1' for major headings
                         - Use 'heading2' for subheadings
-                        
+
                         For the color field, use 'gray' for less important content or '' (empty string) for default.
 
                         Transcript Chunk:
@@ -172,7 +236,7 @@ class TranscriptProcessor:
                         ---
 
                         Please capture all relevant action items. Transcription can have spelling mistakes. correct it if required. context is important.
-                        
+
                         While generating the summary, please add the following context:
                         ---
                         {custom_prompt}
@@ -182,14 +246,13 @@ class TranscriptProcessor:
                     )
 
                     if hasattr(summary_result, 'data') and isinstance(summary_result.data, SummaryResponse):
-                         final_summary_pydantic = summary_result.data
+                        final_summary_pydantic = summary_result.data
                     elif isinstance(summary_result, SummaryResponse):
-                         final_summary_pydantic = summary_result
+                        final_summary_pydantic = summary_result
                     else:
-                         logger.error(f"Unexpected result type from agent for chunk {i+1}: {type(summary_result)}")
-                         continue # Skip this chunk
+                        logger.error(f"Unexpected result type from agent for chunk {i+1}: {type(summary_result)}")
+                        continue
 
-                    # Convert the Pydantic model to a JSON string
                     chunk_summary_json = final_summary_pydantic.model_dump_json()
                     all_json_data.append(chunk_summary_json)
                     logger.info(f"Successfully generated summary for chunk {i+1}.")

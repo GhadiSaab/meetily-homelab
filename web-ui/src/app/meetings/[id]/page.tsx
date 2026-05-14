@@ -145,7 +145,7 @@ export default function MeetingPage() {
         {summaryState === 'done' && summary?.data && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {sectionOrder.map((key) => {
-              const section = summary.data![key] as { title: string; blocks: { id: string; type: string; content: string; color: string }[] } | undefined;
+              const section = summary.data![key] as unknown as { title: string; blocks: { id: string; type: string; content: string; color: string }[] } | undefined;
               if (!section || !section.blocks?.length) return null;
               return (
                 <div key={key} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 16 }}>
